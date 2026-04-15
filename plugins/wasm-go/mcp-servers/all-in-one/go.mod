@@ -6,6 +6,8 @@ replace quark-search => ../quark-search
 
 replace amap-tools => ../amap-tools
 
+replace github.com/higress-group/wasm-go => ../../../../third-party-projects/wasm-go
+
 require (
 	amap-tools v0.0.0-00010101000000-000000000000
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2

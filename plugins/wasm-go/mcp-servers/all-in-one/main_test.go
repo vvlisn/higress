@@ -54,6 +54,40 @@ var restMCPServerConfig = func() json.RawMessage {
 	return data
 }()
 
+var restMCPServerWithDestinationConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"server": map[string]interface{}{
+			"name": "rest-dynamic-route-server",
+			"type": "rest",
+		},
+		"tools": []map[string]interface{}{
+			{
+				"name":        "get_weather",
+				"description": "获取天气信息",
+				"args": []map[string]interface{}{
+					{
+						"name":        "location",
+						"description": "城市名称",
+						"type":        "string",
+						"required":    true,
+					},
+				},
+				"requestTemplate": map[string]interface{}{
+					"url":    "https://httpbin.org/get?city={{.location}}",
+					"method": "GET",
+					"headers": []map[string]interface{}{
+						{
+							"key":   "x-higress-destination",
+							"value": "weather-api.dns:443",
+						},
+					},
+				},
+			},
+		},
+	})
+	return data
+}()
+
 // MCP代理服务器配置
 var mcpProxyServerConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -307,6 +341,120 @@ func TestRestMCPServerToolsCall(t *testing.T) {
 
 		host.CompleteHttp()
 	})
+}
+
+func TestRestMCPServerDynamicDestinationRouting(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		toolsCallRequest := `{
+			"jsonrpc": "2.0",
+			"id": 2,
+			"method": "tools/call",
+			"params": {
+				"name": "get_weather",
+				"arguments": {
+					"location": "北京"
+				}
+			}
+		}`
+
+		t.Run("different cluster uses http call", func(t *testing.T) {
+			host, status := test.NewTestHost(restMCPServerWithDestinationConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			require.NoError(t, host.SetClusterName("outbound|8080||mcp-handler.dns"))
+
+			host.InitHttp()
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "mcp-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
+			require.Equal(t, types.ActionPause, action)
+
+			httpCallouts := host.GetHttpCalloutAttributes()
+			require.Len(t, httpCallouts, 1)
+			require.True(t, test.HasHeaderWithValue(httpCallouts[0].Headers, ":authority", "httpbin.org"))
+			require.False(t, hasHeader(httpCallouts[0].Headers, "x-higress-destination"))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(`{
+				"args": {"city": "北京"},
+				"url": "https://httpbin.org/get?city=北京"
+			}`))
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.NotEmpty(t, localResponse.Data)
+
+			var response map[string]interface{}
+			err := json.Unmarshal(localResponse.Data, &response)
+			require.NoError(t, err)
+			require.Equal(t, "2.0", response["jsonrpc"])
+			require.Equal(t, float64(2), response["id"])
+
+			host.CompleteHttp()
+		})
+
+		t.Run("same cluster keeps route call and strips internal header", func(t *testing.T) {
+			host, status := test.NewTestHost(restMCPServerWithDestinationConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			require.NoError(t, host.SetClusterName("outbound|443||weather-api.dns"))
+
+			host.InitHttp()
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "mcp-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
+			require.Equal(t, types.ActionContinue, action)
+
+			require.Len(t, host.GetHttpCalloutAttributes(), 0)
+			require.False(t, hasHeader(host.GetRequestHeaders(), "x-higress-destination"))
+
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpResponseBody([]byte(`{
+				"args": {"city": "北京"},
+				"url": "https://httpbin.org/get?city=北京"
+			}`))
+			require.Equal(t, types.ActionContinue, action)
+
+			responseBody := host.GetResponseBody()
+			require.NotEmpty(t, responseBody)
+
+			var response map[string]interface{}
+			err := json.Unmarshal(responseBody, &response)
+			require.NoError(t, err)
+			require.Equal(t, "2.0", response["jsonrpc"])
+			require.Equal(t, float64(2), response["id"])
+
+			host.CompleteHttp()
+		})
+	})
+}
+
+func hasHeader(headers [][2]string, key string) bool {
+	for _, header := range headers {
+		if strings.EqualFold(header[0], key) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestMcpProxyServerToolsList 测试MCP代理服务器的tools/list功能

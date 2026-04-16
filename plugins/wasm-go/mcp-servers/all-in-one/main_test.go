@@ -88,6 +88,52 @@ var restMCPServerWithDestinationConfig = func() json.RawMessage {
 	return data
 }()
 
+var restMCPServerWithDestinationAndSecurityConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"server": map[string]interface{}{
+			"name": "rest-dynamic-route-security-server",
+			"type": "rest",
+			"securitySchemes": []map[string]interface{}{
+				{
+					"id":                "backendApiKey",
+					"type":              "apiKey",
+					"in":                "header",
+					"name":              "x-api-key",
+					"defaultCredential": "configured-backend-key",
+				},
+			},
+		},
+		"tools": []map[string]interface{}{
+			{
+				"name":        "get_weather",
+				"description": "获取天气信息",
+				"args": []map[string]interface{}{
+					{
+						"name":        "location",
+						"description": "城市名称",
+						"type":        "string",
+						"required":    true,
+					},
+				},
+				"requestTemplate": map[string]interface{}{
+					"url":    "https://httpbin.org/get?city={{.location}}",
+					"method": "GET",
+					"headers": []map[string]interface{}{
+						{
+							"key":   "x-higress-destination",
+							"value": "weather-api.dns:443",
+						},
+					},
+					"security": map[string]interface{}{
+						"id": "backendApiKey",
+					},
+				},
+			},
+		},
+	})
+	return data
+}()
+
 // MCP代理服务器配置
 var mcpProxyServerConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -369,6 +415,8 @@ func TestRestMCPServerDynamicDestinationRouting(t *testing.T) {
 				{":method", "POST"},
 				{":path", "/mcp"},
 				{"content-type", "application/json"},
+				{"x-transaction-id", "txn-httpcall-123"},
+				{"x-request-id", "req-httpcall-456"},
 			})
 			require.Equal(t, types.HeaderStopIteration, action)
 
@@ -378,6 +426,8 @@ func TestRestMCPServerDynamicDestinationRouting(t *testing.T) {
 			httpCallouts := host.GetHttpCalloutAttributes()
 			require.Len(t, httpCallouts, 1)
 			require.True(t, test.HasHeaderWithValue(httpCallouts[0].Headers, ":authority", "httpbin.org"))
+			require.True(t, test.HasHeaderWithValue(httpCallouts[0].Headers, "x-transaction-id", "txn-httpcall-123"))
+			require.True(t, test.HasHeaderWithValue(httpCallouts[0].Headers, "x-request-id", "req-httpcall-456"))
 			require.False(t, hasHeader(httpCallouts[0].Headers, "x-higress-destination"))
 
 			host.CallOnHttpCall([][2]string{
@@ -397,6 +447,55 @@ func TestRestMCPServerDynamicDestinationRouting(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "2.0", response["jsonrpc"])
 			require.Equal(t, float64(2), response["id"])
+
+			host.CompleteHttp()
+		})
+
+		t.Run("http call keeps security headers while inheriting request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(restMCPServerWithDestinationAndSecurityConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			require.NoError(t, host.SetClusterName("outbound|8080||mcp-handler.dns"))
+
+			host.InitHttp()
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "mcp-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+				{"x-transaction-id", "txn-security-123"},
+				{"x-api-key", "incoming-key"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody([]byte(`{
+				"jsonrpc": "2.0",
+				"id": 4,
+				"method": "tools/call",
+				"params": {
+					"name": "get_weather",
+					"arguments": {
+						"location": "杭州"
+					}
+				}
+			}`))
+			require.Equal(t, types.ActionPause, action)
+
+			httpCallouts := host.GetHttpCalloutAttributes()
+			require.Len(t, httpCallouts, 1)
+			require.True(t, test.HasHeaderWithValue(httpCallouts[0].Headers, "x-transaction-id", "txn-security-123"))
+			require.True(t, test.HasHeaderWithValue(httpCallouts[0].Headers, "x-api-key", "configured-backend-key"))
+			require.False(t, test.HasHeaderWithValue(httpCallouts[0].Headers, "x-api-key", "incoming-key"))
+			require.False(t, hasHeader(httpCallouts[0].Headers, "x-higress-destination"))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(`{"ok":true}`))
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.NotEmpty(t, localResponse.Data)
 
 			host.CompleteHttp()
 		})

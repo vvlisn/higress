@@ -54,8 +54,10 @@ func routeOrHttpCall(
 		log.Warnf("failed to get current cluster name, fallback to HttpCall for %q: %v", destination, err)
 	}
 
+	finalHeaders := mergeInheritedHeadersForHttpCall(copyHeadersForDynamicHttpCall(), filteredHeaders)
+
 	ctx.SetContext(utils.CtxNeedPause, true)
-	return wrapper.HttpCall(targetCluster, method, rawURL, filteredHeaders, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+	return wrapper.HttpCall(targetCluster, method, rawURL, finalHeaders, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		callback(statusCode, convertHTTPHeaderToPairs(responseHeaders), responseBody)
 	})
 }
@@ -71,6 +73,44 @@ func stripDestinationHeader(headers [][2]string) (string, [][2]string) {
 		filteredHeaders = append(filteredHeaders, kv)
 	}
 	return destination, filteredHeaders
+}
+
+func copyHeadersForDynamicHttpCall() [][2]string {
+	headers := make([][2]string, 0)
+	skipHeaders := map[string]bool{
+		"content-length":                   true,
+		"transfer-encoding":                true,
+		":path":                            true,
+		":method":                          true,
+		":scheme":                          true,
+		":authority":                       true,
+		strings.ToLower(DestinationHeader): true,
+	}
+
+	headerMap, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Warnf("failed to get request headers for dynamic HttpCall: %v", err)
+		return [][2]string{}
+	}
+
+	for _, header := range headerMap {
+		headerName := strings.ToLower(header[0])
+		if skipHeaders[headerName] {
+			continue
+		}
+		headers = append(headers, header)
+	}
+
+	return headers
+}
+
+func mergeInheritedHeadersForHttpCall(baseHeaders, overrideHeaders [][2]string) [][2]string {
+	merged := make([][2]string, len(baseHeaders))
+	copy(merged, baseHeaders)
+	for _, header := range overrideHeaders {
+		setOrReplaceHeader(&merged, header[0], header[1])
+	}
+	return merged
 }
 
 func parseDestinationToTargetCluster(destination string) (wrapper.TargetCluster, bool) {

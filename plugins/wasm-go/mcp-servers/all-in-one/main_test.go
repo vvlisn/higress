@@ -116,8 +116,9 @@ var restMCPServerWithDestinationAndSecurityConfig = func() json.RawMessage {
 					},
 				},
 				"requestTemplate": map[string]interface{}{
-					"url":    "https://httpbin.org/get?city={{.location}}",
-					"method": "GET",
+					"url":     "https://httpbin.org/get?city={{.location}}",
+					"method":  "GET",
+					"timeout": 120000,
 					"headers": []map[string]interface{}{
 						{
 							"key":   "x-higress-destination",

@@ -67,6 +67,7 @@ type RestToolRequestTemplate struct {
 	Method         string              `json:"method"`
 	Headers        []RestToolHeader    `json:"headers"`
 	Body           string              `json:"body"`
+	Timeout        int                 `json:"timeout,omitempty"`        // Upstream request timeout in milliseconds
 	ArgsToJsonBody bool                `json:"argsToJsonBody,omitempty"` // Use args as JSON body
 	ArgsToUrlParam bool                `json:"argsToUrlParam,omitempty"` // Add args to URL parameters
 	ArgsToFormBody bool                `json:"argsToFormBody,omitempty"` // Use args as form-urlencoded body
@@ -333,6 +334,7 @@ func (s *RestMCPServer) AddRestTool(toolConfig RestTool) error {
 		serverName: s.name,
 		name:       toolConfig.Name,
 		toolConfig: toolConfig,
+		timeout:    toolConfig.RequestTemplate.Timeout,
 	})
 
 	return nil
@@ -384,6 +386,7 @@ type RestMCPTool struct {
 	serverName string
 	name       string
 	toolConfig RestTool
+	timeout    int
 	arguments  map[string]interface{}
 }
 
@@ -393,6 +396,7 @@ func (t *RestMCPTool) Create(params []byte) Tool {
 		serverName: t.serverName,
 		name:       t.name,
 		toolConfig: t.toolConfig,
+		timeout:    t.timeout,
 		arguments:  make(map[string]interface{}),
 	}
 
@@ -856,8 +860,12 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	if u.Fragment != "" {
 		urlStr += "#" + u.Fragment
 	}
+	toolTimeout := uint32(t.timeout)
+	if toolTimeout == 0 {
+		toolTimeout = 5000
+	}
 	// Make HTTP request using potentially modified headers from authReqCtx
-	err = routeOrHttpCall(ctx, authReqCtx.Method, urlStr, authReqCtx.Headers, authReqCtx.RequestBody,
+	err = routeOrHttpCall(ctx, authReqCtx.Method, urlStr, authReqCtx.Headers, authReqCtx.RequestBody, toolTimeout,
 		func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 
 			if statusCode >= 300 || statusCode < 200 {

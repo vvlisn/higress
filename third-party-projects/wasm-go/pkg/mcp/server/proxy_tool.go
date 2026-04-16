@@ -270,7 +270,7 @@ func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
 	}
 
 	// Use RouteCall for the final tools/list request with potentially modified URL
-	return routeOrHttpCall(ctx, "POST", finalURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	return routeOrHttpCall(ctx, "POST", finalURL, headers, requestBody, 0, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if statusCode != 200 {
 			log.Errorf("Tools/list request failed with status %d: %s", statusCode, string(responseBody))
 			utils.OnMCPResponseError(ctx, fmt.Errorf("backend tools/list failed"), utils.ErrInternalError, "mcp-proxy:tools/list:backend_error")
@@ -391,7 +391,7 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 	}
 
 	// Use RouteCall for the final tools/call request with potentially modified URL
-	return routeOrHttpCall(ctx, "POST", finalURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	return routeOrHttpCall(ctx, "POST", finalURL, headers, requestBody, 0, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if statusCode != 200 {
 			log.Errorf("Tools/call request failed with status %d: %s", statusCode, string(responseBody))
 			utils.OnMCPResponseError(ctx, fmt.Errorf("backend tools/call failed"), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")

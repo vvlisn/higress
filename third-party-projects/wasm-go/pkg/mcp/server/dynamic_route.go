@@ -33,6 +33,7 @@ func routeOrHttpCall(
 	method, rawURL string,
 	headers [][2]string,
 	body []byte,
+	timeout uint32,
 	callback func(int, [][2]string, []byte),
 ) error {
 	destination, filteredHeaders := stripDestinationHeader(headers)
@@ -59,7 +60,7 @@ func routeOrHttpCall(
 	ctx.SetContext(utils.CtxNeedPause, true)
 	return wrapper.HttpCall(targetCluster, method, rawURL, finalHeaders, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		callback(statusCode, convertHTTPHeaderToPairs(responseHeaders), responseBody)
-	})
+	}, timeout)
 }
 
 func stripDestinationHeader(headers [][2]string) (string, [][2]string) {
